@@ -102,7 +102,7 @@ load_env_file(APP_ROOT / ".env")
 load_private_config()
 
 
-API_BASE = "https://app-api-gw-toc.lynkco.com"
+API_BASE = "https://h5.lynkco.cn"
 SERVICE_BASE = "https://app-services.lynkco.com.cn"
 APP_CODE = normalize_config_value(os.getenv("LYNKCO_APP_CODE", ""))
 CA_KEY = normalize_config_value(os.getenv("LYNKCO_CA_KEY", ""))
