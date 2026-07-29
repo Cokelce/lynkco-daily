@@ -207,8 +207,8 @@ def build_app_signature_headers(method: str, path: str, headers: dict[str, str],
     content_type = _header_get(headers, "content-type") or "application/json; charset=utf-8"
     content_md5 = base64.b64encode(hashlib.md5(body or b"").digest()).decode("ascii") if body is not None else ""
     signed_headers = {
-        "x-ca-nonce": nonce,
         "x-ca-key": CA_KEY,
+        "x-ca-nonce": nonce,
         "x-ca-timestamp": timestamp,
     }
     signature_headers = ",".join(signed_headers)
