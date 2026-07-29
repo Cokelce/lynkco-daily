@@ -203,12 +203,12 @@ def build_app_signature_headers(method: str, path: str, headers: dict[str, str],
     nonce = _uuid4_like()
     timestamp = str(int(time.time() * 1000))
     date = formatdate(usegmt=True)
-    accept = _header_get(headers, "accept") or "application/json; charset=utf-8"
+    accept = _header_get(headers, "accept") or "*/*"
     content_type = _header_get(headers, "content-type") or "application/json; charset=utf-8"
     content_md5 = base64.b64encode(hashlib.md5(body or b"").digest()).decode("ascii") if body is not None else ""
     signed_headers = {
-        "x-ca-key": CA_KEY,
         "x-ca-nonce": nonce,
+        "x-ca-key": CA_KEY,
         "x-ca-timestamp": timestamp,
     }
     signature_headers = ",".join(signed_headers)
@@ -709,18 +709,18 @@ class LynkClient:
         data: dict[str, Any] | None = None,
         token_required: bool = True,
     ) -> dict[str, Any]:
-        if not APP_CODE:
-            raise RuntimeError("missing LYNKCO_APP_CODE")
-
         headers = {
-            "accept": "application/json; charset=utf-8",
+            "accept": "*/*",
             "content-type": "application/json; charset=utf-8",
+            "ca_version": "1",
+            "origin": "https://h5.lynkco.cn",
+            "referer": "https://h5.lynkco.cn/",
             "user-agent": "ALIYUN-ANDROID-UA",
             "x-requiretoken": "false",
+            "x-requested-with": "com.lynkco.customer",
         }
         if token_required:
             headers["token"] = self.token
-            headers["svcsid"] = self.token
 
         body = None
         if method.upper() in {"POST", "PUT", "PATCH"}:
@@ -739,6 +739,9 @@ class LynkClient:
                 raw = resp.read().decode("utf-8", errors="replace")
         except HTTPError as exc:
             raw = exc.read().decode("utf-8", errors="replace")
+            error_message = exc.headers.get("X-Ca-Error-Message") or exc.headers.get("x-ca-error-message")
+            if error_message:
+                raw = f"{raw}\nX-Ca-Error-Message: {error_message}"
             raise RuntimeError(f"HTTP {exc.code}: {raw}") from exc
         except URLError as exc:
             raise RuntimeError(f"network error: {exc}") from exc
