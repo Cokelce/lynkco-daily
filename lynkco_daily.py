@@ -739,6 +739,9 @@ class LynkClient:
                 raw = resp.read().decode("utf-8", errors="replace")
         except HTTPError as exc:
             raw = exc.read().decode("utf-8", errors="replace")
+            error_message = exc.headers.get("X-Ca-Error-Message") or exc.headers.get("x-ca-error-message")
+            if error_message:
+                raw = f"{raw}\nX-Ca-Error-Message: {error_message}"
             raise RuntimeError(f"HTTP {exc.code}: {raw}") from exc
         except URLError as exc:
             raise RuntimeError(f"network error: {exc}") from exc
