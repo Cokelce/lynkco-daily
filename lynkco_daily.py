@@ -25,6 +25,7 @@ import sys
 import time
 import importlib.util
 from dataclasses import dataclass
+from email.utils import formatdate
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit
@@ -102,8 +103,9 @@ load_env_file(APP_ROOT / ".env")
 load_private_config()
 
 
-API_BASE = "https://h5.lynkco.cn"
-SERVICE_BASE = "https://app-services.lynkco.com.cn"
+API_BASE = normalize_config_value(os.getenv("LYNKCO_API_BASE", "https://h5.lynkco.cn"))
+APP_API_BASE = normalize_config_value(os.getenv("LYNKCO_APP_API_BASE", "https://app-api-gw-toc.lynkco.com"))
+SERVICE_BASE = normalize_config_value(os.getenv("LYNKCO_SERVICE_BASE", "https://app-services.lynkco.com.cn"))
 APP_CODE = normalize_config_value(os.getenv("LYNKCO_APP_CODE", ""))
 CA_KEY = normalize_config_value(os.getenv("LYNKCO_CA_KEY", ""))
 CA_SECRET = normalize_config_value(os.getenv("LYNKCO_CA_SECRET", "")).encode("utf-8")
@@ -192,6 +194,50 @@ def build_signature_headers(method: str, path: str, headers: dict[str, str], dat
         "Accept": accept,
         "Content-Type": content_type,
     }
+
+
+def build_app_signature_headers(method: str, path: str, headers: dict[str, str], body: bytes | None) -> dict[str, str]:
+    if not CA_KEY or not CA_SECRET:
+        raise RuntimeError("missing LYNKCO_CA_KEY or LYNKCO_CA_SECRET")
+
+    nonce = _uuid4_like()
+    timestamp = str(int(time.time() * 1000))
+    date = formatdate(usegmt=True)
+    accept = _header_get(headers, "accept") or "application/json; charset=utf-8"
+    content_type = _header_get(headers, "content-type") or "application/json; charset=utf-8"
+    content_md5 = base64.b64encode(hashlib.md5(body or b"").digest()).decode("ascii") if body is not None else ""
+    signed_headers = {
+        "x-ca-key": CA_KEY,
+        "x-ca-nonce": nonce,
+        "x-ca-timestamp": timestamp,
+    }
+    signature_headers = ",".join(signed_headers)
+    canonical = [
+        method.upper(),
+        accept,
+        content_md5,
+        content_type,
+        date,
+    ]
+    canonical.extend(f"{key}:{value}" for key, value in signed_headers.items())
+    canonical.append(_canonical_url(path, headers, None))
+    payload = "\n".join(canonical).encode("utf-8")
+    digest = base64.b64encode(hmac.new(CA_SECRET, payload, hashlib.sha256).digest()).decode("ascii")
+
+    result = {
+        "date": date,
+        "x-ca-signature": digest,
+        "x-ca-nonce": nonce,
+        "x-ca-key": CA_KEY,
+        "ca_version": "1",
+        "x-ca-timestamp": timestamp,
+        "x-ca-signature-headers": signature_headers,
+        "accept": accept,
+        "content-type": content_type,
+    }
+    if content_md5:
+        result["content-md5"] = content_md5
+    return result
 
 
 def mask_secret(value: str, keep: int = 6) -> str:
@@ -656,6 +702,52 @@ class LynkClient:
         except json.JSONDecodeError:
             return {"raw": raw}
 
+    def app_request(
+        self,
+        method: str,
+        path: str,
+        data: dict[str, Any] | None = None,
+        token_required: bool = True,
+    ) -> dict[str, Any]:
+        if not APP_CODE:
+            raise RuntimeError("missing LYNKCO_APP_CODE")
+
+        headers = {
+            "accept": "application/json; charset=utf-8",
+            "content-type": "application/json; charset=utf-8",
+            "user-agent": "ALIYUN-ANDROID-UA",
+            "x-requiretoken": "false",
+        }
+        if token_required:
+            headers["token"] = self.token
+            headers["svcsid"] = self.token
+
+        body = None
+        if method.upper() in {"POST", "PUT", "PATCH"}:
+            body = json.dumps(data or {}, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        headers.update(build_app_signature_headers(method, path, headers, body))
+
+        url = APP_API_BASE.rstrip("/") + path
+        if self.verbose:
+            print(f"> {method.upper()} {url}")
+            if data is not None:
+                print(json.dumps(data, ensure_ascii=False))
+
+        req = Request(url, data=body, headers=headers, method=method.upper())
+        try:
+            with urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+                raw = resp.read().decode("utf-8", errors="replace")
+        except HTTPError as exc:
+            raw = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"HTTP {exc.code}: {raw}") from exc
+        except URLError as exc:
+            raise RuntimeError(f"network error: {exc}") from exc
+
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return {"raw": raw}
+
     def refresh_access_token(
         self,
         refresh_token: str,
@@ -696,7 +788,21 @@ class LynkClient:
         raise RuntimeError("refresh token failed:\n" + "\n".join(errors[-4:]))
 
     def sign_in(self) -> dict[str, Any]:
-        return self.request("POST", "/up/api/v1/user/sign", {})
+        errors: list[str] = []
+        for base, method, path, data, requester in (
+            (APP_API_BASE, "POST", "/up/api/v1/user/sign/upgrade", {}, self.app_request),
+            (self.api_base, "POST", "/up/api/v1/user/sign", {}, self.request),
+        ):
+            try:
+                response = requester(method, path, data)
+            except RuntimeError as exc:
+                errors.append(f"{base}{path}: {exc}")
+                continue
+            code = response.get("code")
+            if code in {200, "200", "success"} or response.get("success") is True:
+                return response
+            errors.append(f"{base}{path}: {json.dumps(response, ensure_ascii=False)[:500]}")
+        raise RuntimeError("sign in failed:\n" + "\n".join(errors[-4:]))
 
     def sign_summary(self) -> dict[str, Any]:
         return self.request("GET", "/up/api/v1/userReward/getContinueDaysAndSignCard")
