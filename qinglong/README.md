@@ -11,7 +11,7 @@
 仓库地址：
 
 ```text
-https://github.com/xbgo/lynkco-daily.git
+https://github.com/Cokelce/lynkco-daily.git
 ```
 
 任务命令：

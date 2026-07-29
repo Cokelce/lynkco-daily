@@ -52,7 +52,7 @@ git status --short
 ### 1. 克隆仓库
 
 ```bash
-git clone https://github.com/xbgo/lynkco-daily.git
+git clone https://github.com/Cokelce/lynkco-daily.git
 cd lynkco-daily
 ```
 
